@@ -70,9 +70,17 @@ namespace Microsoft.OData.Client
         /// <param name="baseUri">The baseUri to use in the UriResolver</param>
         /// <param name="parameterName">The name of the parameter that the user passed the baseUri in from.</param>
         /// <returns>The new UriResolver using the passed in baseUri</returns>
-        internal static UriResolver CreateFromBaseUri(Uri baseUri, string parameterName)
+        internal static UriResolver CreateFromBaseUri(Uri baseUri, string parameterName, bool ignoreUriParsingErrors = false)
         {
-            ConvertToAbsoluteAndValidateBaseUri(ref baseUri, parameterName);
+            if (ignoreUriParsingErrors)
+            {
+                baseUri = ConvertToAbsoluteUri(baseUri);
+            }
+            else
+            {
+                ConvertToAbsoluteAndValidateBaseUri(ref baseUri, parameterName);
+            }
+            
             return new UriResolver(baseUri, null);
         }
 

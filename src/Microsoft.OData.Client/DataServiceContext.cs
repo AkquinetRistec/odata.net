@@ -249,8 +249,8 @@ namespace Microsoft.OData.Client
         /// With Silverlight, the <paramref name="serviceRoot"/> can be a relative Uri
         /// that will be combined with System.Windows.Browser.HtmlPage.Document.DocumentUri.
         /// </remarks>
-        public DataServiceContext(Uri serviceRoot, ODataProtocolVersion maxProtocolVersion)
-            : this(serviceRoot, maxProtocolVersion, ClientEdmModelCache.GetModel(maxProtocolVersion))
+        public DataServiceContext(Uri serviceRoot, ODataProtocolVersion maxProtocolVersion, bool ignoreUriParsingErrors = false)
+            : this(serviceRoot, maxProtocolVersion, ClientEdmModelCache.GetModel(maxProtocolVersion), ignoreUriParsingErrors)
         {
         }
 
@@ -271,12 +271,12 @@ namespace Microsoft.OData.Client
         /// With Silverlight, the <paramref name="serviceRoot"/> can be a relative Uri
         /// that will be combined with System.Windows.Browser.HtmlPage.Document.DocumentUri.
         /// </remarks>
-        internal DataServiceContext(Uri serviceRoot, ODataProtocolVersion maxProtocolVersion, ClientEdmModel model)
+        internal DataServiceContext(Uri serviceRoot, ODataProtocolVersion maxProtocolVersion, ClientEdmModel model, bool ignoreUriParsingErrors)
         {
             Debug.Assert(model != null, "model != null");
             this.model = model;
 
-            this.baseUriResolver = UriResolver.CreateFromBaseUri(serviceRoot, ServiceRootParameterName);
+            this.baseUriResolver = UriResolver.CreateFromBaseUri(serviceRoot, ServiceRootParameterName, ignoreUriParsingErrors);
             this.maxProtocolVersion = Util.CheckEnumerationValue(maxProtocolVersion, "maxProtocolVersion");
             this.entityParameterSendOption = EntityParameterSendOption.SendFullProperties;
             this.mergeOption = MergeOption.AppendOnly;
