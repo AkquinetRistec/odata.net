@@ -18,7 +18,7 @@ namespace Microsoft.OData.JsonLight
     using Microsoft.OData.Metadata;
     using ODataErrorStrings = Microsoft.OData.Strings;
 
-    #endregion Namespaces
+#endregion Namespaces
 
     /// <summary>
     /// OData JsonLight serializer for value types.
@@ -329,6 +329,16 @@ namespace Microsoft.OData.JsonLight
             IEdmTypeReference expectedTypeReference)
         {
             Debug.Assert(value != null, "value != null");
+
+#if NETCOREAPP3_1_OR_GREATER
+            if (value is ODataJsonElementValue jsonElementValue)
+            {
+                // We don't perform validation for ODataJsonElementValue.
+                // We assume the content is valid.
+                this.JsonWriter.WriteValue(jsonElementValue.Value);
+                return;
+            }
+#endif
 
             if (actualTypeReference == null)
             {
@@ -663,6 +673,16 @@ namespace Microsoft.OData.JsonLight
             IEdmTypeReference expectedTypeReference)
         {
             Debug.Assert(value != null, "value != null");
+
+#if NETCOREAPP3_1_OR_GREATER
+            if (value is ODataJsonElementValue jsonElementValue)
+            {
+                // We don't perform validation for ODataJsonElementValue.
+                // We assume the content is valid.
+                await this.AsynchronousJsonWriter.WriteValueAsync(jsonElementValue.Value).ConfigureAwait(false);
+                return;
+            }
+#endif
 
             if (actualTypeReference == null)
             {

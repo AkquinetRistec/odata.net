@@ -115,7 +115,7 @@ You can query the latest nightly NuGet packages using this query: [MAGIC OData q
 
 The release of the component binaries is carried out regularly through [Nuget](http://www.nuget.org/). A new version is released every 2 months. A new [milestone](https://github.com/OData/odata.net/milestones) item will be created after each release. It will correspond to the work that is expected to be included in the next release. Any work that has been completed by the due date for the milestone will be shipped regardless of if the entire milestone is completed. Work that is not completed by the due date will be moved to another milestone. 
 
-Details on the release process are found [here](./release.md)
+Details on the release process are found [here](./docs/release.md)
 
 ### 3.6 Performance benchmarks
 
@@ -281,7 +281,11 @@ Please visit the [ODataLib docs](https://docs.microsoft.com/en-us/odata/) on doc
 
 There are many ways for you to contribute to OData .NET. The easiest way is to participate in discussion of features and issues. You can also contribute by sending pull requests of features or bug fixes to us. Contribution to the documentations is also highly welcomed. Please refer to the [CONTRIBUTING.md](https://github.com/OData/odata.net/blob/master/.github/CONTRIBUTING.md) for more details.
 
-### 5.2 Support
+### 5.2 Reporting Security Issues
+
+Security issues and bugs should be reported privately, via email, to the Microsoft Security Response Center (MSRC) <secure@microsoft.com>. You should receive a response within 24 hours. If for some reason you do not, please follow up via email to ensure we received your original message. Further information, including the MSRC PGP key, can be found in the [Security TechCenter](https://www.microsoft.com/msrc/faqs-report-an-issue). You can also find these instructions in this repo's [SECURITY.md](./SECURITY.md).
+
+### 5.3 Support
 
 - Issues: Report issues on [Github issues](https://github.com/OData/odata.net/issues).
 - Questions: Ask questions on [Stack Overflow](http://stackoverflow.com/questions/ask?tags=odata).

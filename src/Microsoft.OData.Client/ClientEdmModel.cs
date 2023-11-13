@@ -473,7 +473,20 @@ namespace Microsoft.OData.Client
                                 entityType.AddProperty(property);
                             }
 
-                            entityType.AddKeys(loadedKeyProperties);
+                            // add keys in the same order of "keyProperties"
+                            List<IEdmStructuralProperty> orderedloadedKeyProperties = new List<IEdmStructuralProperty>();
+                            foreach (var orderedKey in keyProperties)
+                            {
+                                string serverDefinedName = ClientTypeUtil.GetServerDefinedName(orderedKey);
+                                IEdmStructuralProperty keyProperty = loadedKeyProperties.FirstOrDefault(k => k.Name == serverDefinedName);
+
+                                if (keyProperty != null)
+                                {
+                                    orderedloadedKeyProperties.Add(keyProperty);
+                                }
+                            }
+
+                            entityType.AddKeys(orderedloadedKeyProperties);
                         };
 
                         // Creating an entity type
@@ -589,7 +602,7 @@ namespace Microsoft.OData.Client
                 {
                     if (declaringType as IEdmEntityType == null && declaringType as IEdmComplexType == null)
                     {
-                        throw c.Error.InvalidOperation(c.Strings.ClientTypeCache_NonEntityTypeOrNonComplexTypeCannotContainEntityProperties(propertyInfo.Name, propertyInfo.DeclaringType.ToString()));
+                        throw c.Error.InvalidOperation(c.Strings.ClientTypeCache_NonEntityTypeCannotContainEntityProperties(propertyInfo.Name, propertyInfo.DeclaringType.ToString()));
                     }
 
                     // Create a navigation property representing one side of an association.
