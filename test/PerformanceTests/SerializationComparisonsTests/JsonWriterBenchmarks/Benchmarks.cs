@@ -21,10 +21,11 @@ namespace JsonWriterBenchmarks
     {
         private readonly static WriterCollection<IEnumerable<Customer>> writerCollection = DefaultWriterCollection.Create();
         private readonly IEnumerable<Customer> data;
+        private readonly IEnumerable<Customer> dataWithLargeValues;
         private readonly IEdmModel model;
+        private Stream outputStream;
 
-        private Stream memoryStream;
-        private Stream fileStream;
+        private string filePath;
         private IPayloadWriter<IEnumerable<Customer>> writer;
 
         [ParamsSource(nameof(WriterNames))]
@@ -37,29 +38,32 @@ namespace JsonWriterBenchmarks
         {
             // the written output will be about 1.45MB of JSON text
             data = CustomerDataSet.GetCustomers(5000);
+            // contains fields with 1MB+ values each
+
+            dataWithLargeValues = CustomerDataSet.GetDataWithLargeFields(30);
             model = DataModel.GetEdmModel();
         }
 
-        [IterationSetup]
-        public void SetupStreams()
+        [GlobalSetup]
+        public void Setup()
         {
-            memoryStream = new MemoryStream();
-            string path = Path.GetTempFileName();
-            fileStream = new FileStream(path, FileMode.Create, FileAccess.Write);
             writer = writerCollection.GetWriter(WriterName);
+            filePath = Path.GetTempFileName();
+            outputStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, share: FileShare.ReadWrite);
         }
 
-        [IterationCleanup]
-        public void CleanUp()
+        [GlobalCleanup]
+        public void Cleanup()
         {
-            fileStream.Close();
-            fileStream = null;
+            outputStream.Dispose();
+            File.Delete(filePath);
         }
 
         [Benchmark]
         [BenchmarkCategory("InMemory")]
         public async Task WriteToMemoryAsync()
         {
+            using var memoryStream = new MemoryStream();
             await writer.WritePayloadAsync(data, memoryStream);
         }
 
@@ -68,11 +72,8 @@ namespace JsonWriterBenchmarks
         public async Task WriteToFileAsync()
         {
             // multiple writes to increase benchmark duration
-            await writer.WritePayloadAsync(data, fileStream);
-            await writer.WritePayloadAsync(data, fileStream);
-            await writer.WritePayloadAsync(data, fileStream);
-            await writer.WritePayloadAsync(data, fileStream);
-            await writer.WritePayloadAsync(data, fileStream);
+            await WritePayloadAsync(data);
+            await WritePayloadAsync(data);
         }
 
         [Benchmark]
@@ -80,11 +81,20 @@ namespace JsonWriterBenchmarks
         public async Task WriteWithRawValues()
         {
             // multiple writes to increase benchmark duration
-            await writer.WritePayloadAsync(data, fileStream, includeRawValues: true);
-            await writer.WritePayloadAsync(data, fileStream, includeRawValues: true);
-            await writer.WritePayloadAsync(data, fileStream, includeRawValues: true);
-            await writer.WritePayloadAsync(data, fileStream, includeRawValues: true);
-            await writer.WritePayloadAsync(data, fileStream, includeRawValues: true);
+            await WritePayloadAsync(data, includeRawValues: true);
+            await WritePayloadAsync(data, includeRawValues: true);
+        }
+
+        [Benchmark]
+        [BenchmarkCategory("ToFile")]
+        public async Task WriteToFileWithLargeValuesAsync()
+        {
+            await WritePayloadAsync(dataWithLargeValues);
+        }
+
+        private async Task WritePayloadAsync(IEnumerable<Customer> payload, bool includeRawValues = false)
+        {
+            await writer.WritePayloadAsync(payload, outputStream, includeRawValues);
         }
     }
 }

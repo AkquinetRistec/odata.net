@@ -35,6 +35,7 @@ namespace ExperimentsLib
         public async Task WritePayloadAsync(IEnumerable<Customer> payload, Stream stream, bool includeRawValues)
         {
             ODataMessageWriterSettings settings = new ODataMessageWriterSettings();
+            settings.EnableMessageStreamDisposal = false;
             settings.ODataUri = new ODataUri
             {
                 ServiceRoot = new Uri("https://services.odata.org/V4/OData/OData.svc/")
@@ -49,7 +50,7 @@ namespace ExperimentsLib
             
             IODataResponseMessage message = this.messageFactory(stream);
 
-            var messageWriter = new ODataMessageWriter(message, settings, this.model);
+            await using var messageWriter = new ODataMessageWriter(message, settings, this.model);
             var entitySet = this.model.EntityContainer.FindEntitySet("Customers");
             ODataWriter writer = await messageWriter.CreateODataResourceSetWriterAsync(entitySet);
 
@@ -78,6 +79,16 @@ namespace ExperimentsLib
                                 Items = customer.Emails,
                                 TypeName = "Collection(Edm.String)"
                             }
+                        },
+                        new ODataProperty
+                        {
+                            Name = "Bio",
+                            Value = customer.Bio
+                        },
+                        new ODataProperty
+                        {
+                            Name = "Content",
+                            Value = customer.Content
                         }
                     }
                 };

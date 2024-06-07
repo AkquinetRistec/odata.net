@@ -418,7 +418,7 @@ namespace Microsoft.OData.Edm.Csdl.CsdlSemantics
 
                 if (targetSegmentsCount == 3)
                 {
-                    // The only valid target with three segments is a function parameter, or an operation return.
+                    // First try the case of three segments being a function parameter, or an operation return.
                     string containerName = targetSegments[0];
                     string operationName = targetSegments[1];
                     string parameterName = targetSegments[2];
@@ -448,6 +448,14 @@ namespace Microsoft.OData.Edm.Csdl.CsdlSemantics
 
                             return new UnresolvedParameter(operationImport.Operation, parameterName, this.Location);
                         }
+
+                        // Failing the above special cases, fallback to standard targetPath parsing.
+                        IEdmTargetPath targetPath = model.GetTargetPath(target);
+
+                        if (targetPath != null)
+                        {
+                            return targetPath;
+                        }
                     }
 
                     string qualifiedOperationName = containerName + "/" + operationName;
@@ -460,6 +468,18 @@ namespace Microsoft.OData.Edm.Csdl.CsdlSemantics
                     {
                         return new UnresolvedParameter(unresolvedOperation, parameterName, this.Location);
                     }
+                }
+
+                if (targetSegmentsCount > 3)
+                {
+                    IEdmTargetPath targetPath = model.GetTargetPath(target);
+
+                    if (targetPath != null)
+                    {
+                        return targetPath;
+                    }
+
+                    return new UnresolvedProperty(new UnresolvedEntityType(this.model.ReplaceAlias(targetSegments[targetSegments.Length - 2]), this.Location), targetSegments[targetSegments.Length - 1], this.Location);
                 }
 
                 return new BadElement(new EdmError[] { new EdmError(this.Location, EdmErrorCode.ImpossibleAnnotationsTarget, Edm.Strings.CsdlSemantics_ImpossibleAnnotationsTarget(target)) });

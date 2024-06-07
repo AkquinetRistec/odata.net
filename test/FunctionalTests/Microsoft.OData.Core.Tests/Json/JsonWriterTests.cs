@@ -174,10 +174,49 @@ namespace Microsoft.OData.Tests.Json
             Assert.Equal("null", this.builder.ToString());
         }
 
+        [Theory]
+        [InlineData(124.45, "124.45")]
+        // We write the .0 for doubles without a fractional part
+        // for consistency with the original JsonWriter implementation
+        // and with previous versions. However, it's not a hard requirement.
+        // Clients should not rely on the .0 to decide whether a value
+        // is an integer or double.
+        // In the future we can consider relaxing the need to add a .0 (possibly behind a feature flag).
+        [InlineData(124.0, "124.0")]
+        [InlineData(1.123456789012345, "1.123456789012345")]
+        [InlineData(1.245E+24, "1.245E+24")]
+        [InlineData(1.245E-24, "1.245E-24")]
+        [InlineData(double.PositiveInfinity, "\"INF\"")]
+        [InlineData(double.NegativeInfinity, "\"-INF\"")]
+        [InlineData(double.NaN, "\"NaN\"")]
+        public void WriteDouble(double value, string expectedOutput)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonWriter jsonWriter = CreateJsonWriter(stream, isIeee754Compatible: false, Encoding.UTF8);
+                jsonWriter.WriteValue(value);
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
+        }
+
         [Fact]
         public void WritePrimitiveValueDateTimeOffset()
         {
             this.VerifyWritePrimitiveValue(new DateTimeOffset(1, 2, 3, 4, 5, 6, 7, new TimeSpan(1, 2, 0)), "\"0001-02-03T04:05:06.007+01:02\"");
+        }
+
+        [Fact]
+        public void WritePrimitiveValueDateTimeOffsetWithZeroOffset()
+        {
+            this.VerifyWritePrimitiveValue(new DateTimeOffset(1, 2, 3, 4, 5, 6, 7, TimeSpan.Zero), "\"0001-02-03T04:05:06.007Z\"");
         }
 
         [Fact]
@@ -357,6 +396,157 @@ namespace Microsoft.OData.Tests.Json
         {
             SetupJsonWriterRunTestAndVerifyRent(
                 (jsonWriter) => jsonWriter.WriteValue("foo\tbar"));
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreams_NonAsciiCharacters_ToOutput(string contentType)
+        {
+            string input = "😊😊😊😊😊😊😊😊";
+            string expectedOutput = "😊😊😊😊😊😊😊😊";
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteSpecialCharsInChunksOfOddStringInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreamsLargeStringsWithSpecialCharactersToOutput(string contentType)
+        {
+            int inputLength = 1024 * 1024; // 1MB
+            string input = new string('a', inputLength);
+
+            // Append special characters to the input string
+            input += "U+1F600";
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteLargeStringInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{input}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreamsLargeStrings_WithOnlySpecialCharacters_ToOutput(string contentType)
+        {
+            string input = "\n\n\n\n\"\"\n\n\n\n\"\"";
+            string expectedOutput = "\\n\\n\\n\\n\\\"\\\"\\n\\n\\n\\n\\\"\\\"";
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteSpecialCharsInChunksOfOddStringInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreamsLargeStringsToOutput(string contentType)
+        {
+            int inputLength = 1024 * 1024; // 1MB
+            string input = new string('a', inputLength);
+            string expectedOutput = ExpectedOutPutStringWithSpecialCharacters(input);
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteLargeStringsWithSpecialCharactersInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("application/json", 'a', "a")]
+        [InlineData("text/html", 'a', "\"a\"")]
+        [InlineData("text/plain", 'a', "\"a\"")]
+        // JSON special char
+        [InlineData("application/json", '"', "\"")]
+        [InlineData("text/html", '"', "\"\\\"\"")]
+        [InlineData("text/plain", '"', "\"\\\"\"")]
+        // non-ascii
+        [InlineData("application/json", '你', "你")]
+        [InlineData("text/html", '你', "\"你\"")]
+        [InlineData("text/plain", '你', "\"你\"")]
+        public void TextWriter_CorrectlyWritesSingleCharacter(string contentType, char value, string expectedOutput)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+                tw.Write(value);
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
         }
 
         private void SetupJsonWriterRunTestAndVerifyRent(Action<JsonWriter> action)

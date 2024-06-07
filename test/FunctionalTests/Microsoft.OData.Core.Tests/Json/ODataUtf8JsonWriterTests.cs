@@ -8,11 +8,14 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Mime;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Text.Unicode;
 using Microsoft.OData.Edm;
 using Microsoft.OData.Json;
 using Xunit;
+using static Microsoft.OData.Json.ODataUtf8JsonWriter;
 
 namespace Microsoft.OData.Tests.Json
 {
@@ -109,6 +112,39 @@ namespace Microsoft.OData.Tests.Json
             this.VerifyWritePrimitiveValue(42.2d, "42.2");
         }
 
+        [Theory]
+        [InlineData(124.45, "124.45")]
+        // We write the .0 for doubles without a fractional part
+        // for consistency with the original JsonWriter implementation
+        // and with previous versions. However, it's not a hard requirement.
+        // Clients should not rely on the .0 to decide whether a value
+        // is an integer or double.
+        // In the future we can consider relaxing the need to add a .0 (possibly behind a feature flag).
+        [InlineData(124.0, "124")]
+        [InlineData(1.123456789012345, "1.123456789012345")]
+        [InlineData(1.245E+24, "1.245E+24")]
+        [InlineData(1.245E-24, "1.245E-24")]
+        [InlineData(double.PositiveInfinity, "\"INF\"")]
+        [InlineData(double.NegativeInfinity, "\"-INF\"")]
+        [InlineData(double.NaN, "\"NaN\"")]
+        public void WriteDouble(double value, string expectedOutput)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonWriter jsonWriter = CreateJsonWriter(stream, isIeee754Compatible: false, Encoding.UTF8);
+                jsonWriter.WriteValue(value);
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
+        }
+
         [Fact]
         public void WritePrimitiveValueDoubleNaN()
         {
@@ -125,6 +161,24 @@ namespace Microsoft.OData.Tests.Json
         public void WritePrimitiveValueDoubleNegativeInfinity()
         {
             this.VerifyWritePrimitiveValue(double.NegativeInfinity, "\"-INF\"");
+        }
+
+        [Fact]
+        public void WritePrimitiveValueFloatNaN()
+        {
+            this.VerifyWritePrimitiveValue(float.NaN, "\"NaN\"");
+        }
+
+        [Fact]
+        public void WritePrimitiveValueFloatPositiveInfinity()
+        {
+            this.VerifyWritePrimitiveValue(float.PositiveInfinity, "\"INF\"");
+        }
+
+        [Fact]
+        public void WritePrimitiveValueFloatNegativeInfinity()
+        {
+            this.VerifyWritePrimitiveValue(float.NegativeInfinity, "\"-INF\"");
         }
 
         [Fact]
@@ -170,6 +224,33 @@ namespace Microsoft.OData.Tests.Json
         }
 
         [Fact]
+        public void WritePrimitiveValueLargeString()
+        {
+            this.VerifyWritePrimitiveValue(
+                new string('x', 30000),
+                "\"" + new string('x', 30000) + "\""
+                );
+        }
+
+        [Fact]
+        public void WritePrimitiveValueLargeStringWithSpecialChars()
+        {
+            this.VerifyWritePrimitiveValue(
+                new string('x', 20000) + "Foo ия" + new string('x', 10000),
+                "\"" + new string('x', 20000) + "Foo \\u0438\\u044F" + new string('x', 10000) + "\""
+                );
+        }
+
+        [Fact]
+        public void WritePrimitiveValueLargeStringWithSurrogatePairs()
+        {
+            this.VerifyWritePrimitiveValue(
+                new string('x', 2010) + "Foo ия" + char.ConvertFromUtf32(0x1F60A) + new string('x', 10000) + char.ConvertFromUtf32(0x1F60A),
+                "\"" + new string('x', 2010) + "Foo \\u0438\\u044F" + "\\uD83D\\uDE0A" + new string('x', 10000) + "\\uD83D\\uDE0A" + "\""
+                );
+        }
+
+        [Fact]
         public void WritePrimitiveValueStringWritesNullIfArgumentIsNull()
         {
             this.writer.WriteValue((string)null);
@@ -205,6 +286,12 @@ namespace Microsoft.OData.Tests.Json
         public void WritePrimitiveValueDateTimeOffset()
         {
             this.VerifyWritePrimitiveValue(new DateTimeOffset(1, 2, 3, 4, 5, 6, 7, new TimeSpan(1, 2, 0)), "\"0001-02-03T04:05:06.007+01:02\"");
+        }
+
+        [Fact]
+        public void WritePrimitiveValueDateTimeOffsetWithZeroOffset()
+        {
+            this.VerifyWritePrimitiveValue(new DateTimeOffset(1, 2, 3, 4, 5, 6, 7, TimeSpan.Zero), "\"0001-02-03T04:05:06.007Z\"");
         }
 
         [Fact]
@@ -449,6 +536,58 @@ namespace Microsoft.OData.Tests.Json
 
         #endregion Custom JavaScriptEncoder
 
+        #region Large strings
+        [Fact]
+        public void WritesLargeStringsWithEscapingCorrectly()
+        {
+            string baseString = "Foo 𐀅 ä Foo \nBar\t\"Baz\" Foo ия <script>";
+            string baseExpectedString = "Foo \\uD800\\uDC05 \\u00E4 Foo \\nBar\\t\\u0022Baz\\u0022 Foo \\u0438\\u044F \\u003Cscript\\u003E";
+            var inputBuilder = new StringBuilder();
+            var expectedBuilder = new StringBuilder();
+
+            expectedBuilder.Append("\"");
+            while (inputBuilder.Length < (1024 * 1024))
+            {
+                inputBuilder.Append(baseString);
+                expectedBuilder.Append(baseExpectedString);
+            }
+            expectedBuilder.Append("\"");
+
+            var input = inputBuilder.ToString();
+            var expected = expectedBuilder.ToString();
+
+            this.writer.WritePrimitiveValue(input);
+
+            Assert.Equal(expected, this.ReadStream());
+        }
+
+        [Fact]
+        public void WritesLargeStringsWithEscapingWithRelaxedEncoderCorrectly()
+        {
+            string baseString = "test<>\"ия\n\t";
+            string baseExpectedString = "test<>\\\"ия\\n\\t";
+            var inputBuilder = new StringBuilder();
+            var expectedBuilder = new StringBuilder();
+
+            expectedBuilder.Append("\"");
+            while (inputBuilder.Length < (1024 * 1024))
+            {
+                inputBuilder.Append(baseString);
+                expectedBuilder.Append(baseExpectedString);
+            }
+            expectedBuilder.Append("\"");
+
+            var input = inputBuilder.ToString();
+            var expected = expectedBuilder.ToString();
+
+            this.writer = new ODataUtf8JsonWriter(this.stream, false, Encoding.UTF8, encoder: JavaScriptEncoder.UnsafeRelaxedJsonEscaping);
+            this.writer.WritePrimitiveValue(input);
+
+            Assert.Equal(expected, this.ReadStream());
+        }
+
+        #endregion
+
         [Fact]
         public void FlushesWhenBufferThresholdIsReached()
         {
@@ -533,6 +672,183 @@ namespace Microsoft.OData.Tests.Json
             using var jsonWriter = new ODataUtf8JsonWriter(stream, true, Encoding.UTF8, leaveStreamOpen: true);
             jsonWriter.Flush();
             Assert.Equal(0, stream.Length);
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreamsLargeStrings_WithOnlySpecialCharacters_ToOutput(string contentType)
+        {
+            string input = "\n\n\n\n\"\"\n\n\n\n\"\"";
+            string expectedOutput = "\\n\\n\\n\\n\\u0022\\u0022\\n\\n\\n\\n\\u0022\\u0022";
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteSpecialCharsInChunksOfOddStringInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreams_NonAsciiCharacters_ToOutput(string contentType)
+        {
+            string input = "😊😊😊😊😊😊😊😊";
+            string expectedOutput = "\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A";
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteSpecialCharsInChunksOfOddStringInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreamsLargeStringsWithSpecialCharactersToOutput(string contentType)
+        {
+            int inputLength = 1024 * 1024; // 1MB
+            string input = new string('a', inputLength) + "U+1F600";
+
+            string expectedOutput = new string('a', inputLength) + "U\\u002B1F600";
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteLargeStringInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public void CorrectlyStreamsLargeStringsToOutput(string contentType)
+        {
+            int inputLength = 1024 * 1024; // 1MB
+            string input = new string('a', inputLength);
+            string expectedOutput = ExpectedOutPutStringWithSpecialCharacters_ODataUtf8Encoding(input);
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+
+                WriteLargeStringsWithSpecialCharactersInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Fact]
+        public void CorrectlyStreams_NonAsciiCharacters_ToOutput_UsingApplicationJson()
+        {
+            string input = "😊😊😊😊😊😊😊😊";
+            string expectedOutput = "😊😊😊😊😊😊😊😊";
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+
+                var tw = jsonWriter.StartTextWriterValueScope("application/json");
+
+                WriteSpecialCharsInChunksOfOddStringInChunks(tw, input);
+
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("application/json", 'a', "a")]
+        [InlineData("text/html", 'a', "\"a\"")]
+        [InlineData("text/plain", 'a', "\"a\"")]
+        // JSON special char
+        [InlineData("application/json", '"', "\"")]
+        [InlineData("text/html", '"', "\"\\u0022\"")]
+        [InlineData("text/plain", '"', "\"\\u0022\"")]
+        // non-ascii
+        [InlineData("application/json", '你', "你")]
+        [InlineData("text/html", '你', "\"\\u4F60\"")]
+        [InlineData("text/plain", '你', "\"\\u4F60\"")]
+        public void TextWriter_CorrectlyWritesSingleCharacter(string contentType, char value, string expectedOutput)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriter jsonWriter = CreateJsonWriter(stream, false, Encoding.UTF8) as IJsonStreamWriter;
+                var tw = jsonWriter.StartTextWriterValueScope(contentType);
+                tw.Write(value);
+                jsonWriter.EndTextWriterValueScope();
+                jsonWriter.Flush();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = reader.ReadToEnd();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
         }
 
         /// <summary>

@@ -127,6 +127,24 @@ namespace Microsoft.OData.Tests.Json
         }
 
         [Fact]
+        public async Task WritePrimitiveValueAsyncFloatNaN()
+        {
+            await this.VerifyWritePrimitiveValueAsync(float.NaN, "\"NaN\"");
+        }
+
+        [Fact]
+        public async Task WritePrimitiveValueAsyncFloatPositiveInfinity()
+        {
+            await this.VerifyWritePrimitiveValueAsync(float.PositiveInfinity, "\"INF\"");
+        }
+
+        [Fact]
+        public async Task WritePrimitiveValueAsyncFloatNegativeInfinity()
+        {
+            await this.VerifyWritePrimitiveValueAsync(float.NegativeInfinity, "\"-INF\"");
+        }
+
+        [Fact]
         public async Task WritePrimitiveValueAsync_Int16()
         {
             await this.VerifyWritePrimitiveValueAsync((short)876, "876");
@@ -207,6 +225,12 @@ namespace Microsoft.OData.Tests.Json
         }
 
         [Fact]
+        public async Task WritePrimitiveValueAsync_DateTimeOffset_WithZeroOffsetWithZeroOffset()
+        {
+            await this.VerifyWritePrimitiveValueAsync(new DateTimeOffset(1, 2, 3, 4, 5, 6, 7, TimeSpan.Zero), "\"0001-02-03T04:05:06.007Z\"");
+        }
+
+        [Fact]
         public async Task WritePrimitiveValueAsync_Guid()
         {
             await this.VerifyWritePrimitiveValueAsync(new Guid("00000012-0000-0000-0000-012345678900"), "\"00000012-0000-0000-0000-012345678900\"");
@@ -241,6 +265,33 @@ namespace Microsoft.OData.Tests.Json
             this.writer = new ODataUtf8JsonWriter(this.stream, isIeee754Compatible, Encoding.UTF8);
             await this.writer.WritePrimitiveValueAsync(parameter);
             Assert.Equal(expected, await this.ReadStreamAsync());
+        }
+
+        [Theory]
+        [InlineData(124.45, "124.45")]
+        [InlineData(124.0, "124")]
+        [InlineData(1.123456789012345, "1.123456789012345")]
+        [InlineData(1.245E+24, "1.245E+24")]
+        [InlineData(1.245E-24, "1.245E-24")]
+        [InlineData(double.PositiveInfinity, "\"INF\"")]
+        [InlineData(double.NegativeInfinity, "\"-INF\"")]
+        [InlineData(double.NaN, "\"NaN\"")]
+        public async Task WriteDoubleAsync(double value, string expectedOutput)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonWriterAsync jsonWriter = CreateJsonWriterAsync(stream, false, Encoding.UTF8);
+                await jsonWriter.WriteValueAsync(value);
+                await jsonWriter.FlushAsync();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = await reader.ReadToEndAsync();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
         }
 
         #endregion
@@ -449,6 +500,58 @@ namespace Microsoft.OData.Tests.Json
 
         #endregion Custom JavaScriptEncoder
 
+        #region Large strings
+        [Fact]
+        public async Task WritesLargeStringsWithEscapingCorrectly()
+        {
+            string baseString = "Foo 𐀅 ä Foo \nBar\t\"Baz\" Foo ия <script>";
+            string baseExpectedString = "Foo \\uD800\\uDC05 \\u00E4 Foo \\nBar\\t\\u0022Baz\\u0022 Foo \\u0438\\u044F \\u003Cscript\\u003E";
+            var inputBuilder = new StringBuilder();
+            var expectedBuilder = new StringBuilder();
+
+            expectedBuilder.Append("\"");
+            while (inputBuilder.Length < (1024 * 1024))
+            {
+                inputBuilder.Append(baseString);
+                expectedBuilder.Append(baseExpectedString);
+            }
+            expectedBuilder.Append("\"");
+
+            var input = inputBuilder.ToString();
+            var expected = expectedBuilder.ToString();
+
+            await this.writer.WritePrimitiveValueAsync(input);
+
+            Assert.Equal(expected, await this.ReadStreamAsync());
+        }
+
+        [Fact]
+        public async Task WritesLargeStringsWithEscapingWithRelaxedEncoderCorrectly()
+        {
+            string baseString = "test<>\"ия\n\t";
+            string baseExpectedString = "test<>\\\"ия\\n\\t";
+            var inputBuilder = new StringBuilder();
+            var expectedBuilder = new StringBuilder();
+
+            expectedBuilder.Append("\"");
+            while (inputBuilder.Length < (1024 * 1024))
+            {
+                inputBuilder.Append(baseString);
+                expectedBuilder.Append(baseExpectedString);
+            }
+            expectedBuilder.Append("\"");
+
+            var input = inputBuilder.ToString();
+            var expected = expectedBuilder.ToString();
+
+            this.writer = new ODataUtf8JsonWriter(this.stream, false, Encoding.UTF8, encoder: JavaScriptEncoder.UnsafeRelaxedJsonEscaping);
+            await this.writer.WritePrimitiveValueAsync(input);
+
+            Assert.Equal(expected, await this.ReadStreamAsync());
+        }
+
+        #endregion
+
         [Fact]
         public async Task FlushesWhenBufferThresholdIsReachedAsync()
         {
@@ -535,6 +638,122 @@ namespace Microsoft.OData.Tests.Json
             Assert.Equal(0, stream.Length);
         }
 
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public async Task CorrectlyStreamsLargeStrings_WithOnlySpecialCharacters_ToOutput(string contentType)
+        {
+            string input = "\n\n\n\n\"\"\n\n\n\n\"\"";
+            string expectedOutput = "\\n\\n\\n\\n\\u0022\\u0022\\n\\n\\n\\n\\u0022\\u0022";
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriterAsync jsonWriter = CreateJsonWriterAsync(stream, false, Encoding.UTF8) as IJsonStreamWriterAsync;
+
+                var tw = await jsonWriter.StartTextWriterValueScopeAsync(contentType);
+
+                await WriteSpecialCharsInChunksOfOddStringInChunksAsync(tw, input);
+
+                await jsonWriter.EndTextWriterValueScopeAsync();
+                await jsonWriter.FlushAsync();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = await reader.ReadToEndAsync();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("text/plain")]
+        [InlineData("text/html")]
+        public async Task CorrectlyStreams_NonAsciiCharacters_ToOutput(string contentType)
+        {
+            string input = "😊😊😊😊😊😊😊😊";
+            string expectedOutput = "\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A\\uD83D\\uDE0A";
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriterAsync jsonWriter = CreateJsonWriterAsync(stream, false, Encoding.UTF8) as IJsonStreamWriterAsync;
+
+                var tw = await jsonWriter.StartTextWriterValueScopeAsync(contentType);
+
+                await WriteSpecialCharsInChunksOfOddStringInChunksAsync(tw, input);
+
+                await jsonWriter.EndTextWriterValueScopeAsync();
+                await jsonWriter.FlushAsync();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = await reader.ReadToEndAsync();
+                    Assert.Equal($"\"{expectedOutput}\"", rawOutput);
+                }
+            }
+        }
+
+        [Fact]
+        public async Task CorrectlyStreams_NonAsciiCharacters_ToOutput_UsingApplicationJson()
+        {
+            string input = "😊😊😊😊😊😊😊😊";
+            string expectedOutput = "😊😊😊😊😊😊😊😊";
+
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriterAsync jsonWriter = CreateJsonWriterAsync(stream, false, Encoding.UTF8) as IJsonStreamWriterAsync;
+
+                var tw = await jsonWriter.StartTextWriterValueScopeAsync("application/json");
+
+                await WriteSpecialCharsInChunksOfOddStringInChunksAsync(tw, input);
+
+                await jsonWriter.EndTextWriterValueScopeAsync();
+                await jsonWriter.FlushAsync();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = await reader.ReadToEndAsync();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("application/json", 'a', "a")]
+        [InlineData("text/html", 'a', "\"a\"")]
+        [InlineData("text/plain", 'a', "\"a\"")]
+        // JSON special char
+        [InlineData("application/json", '"', "\"")]
+        [InlineData("text/html", '"', "\"\\u0022\"")]
+        [InlineData("text/plain", '"', "\"\\u0022\"")]
+        // non-ascii
+        [InlineData("application/json", '你', "你")]
+        [InlineData("text/html", '你', "\"\\u4F60\"")]
+        [InlineData("text/plain", '你', "\"\\u4F60\"")]
+        public async Task TextWriter_CorrectlyWritesSingleCharacterAsync(string contentType, char value, string expectedOutput)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                IJsonStreamWriterAsync jsonWriter = CreateJsonWriterAsync(stream, false, Encoding.UTF8) as IJsonStreamWriterAsync;
+                var tw = await jsonWriter.StartTextWriterValueScopeAsync(contentType);
+                await tw.WriteAsync(value);
+                await jsonWriter.EndTextWriterValueScopeAsync();
+                await jsonWriter.FlushAsync();
+
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader reader = new StreamReader(stream, encoding: Encoding.UTF8))
+                {
+                    string rawOutput = await reader.ReadToEndAsync();
+                    Assert.Equal(expectedOutput, rawOutput);
+                }
+            }
+        }
+
         /// <summary>
         /// Reads the test class's default stream with UTF8 encoding.
         /// </summary>
@@ -574,6 +793,21 @@ namespace Microsoft.OData.Tests.Json
         protected override IJsonWriterAsync CreateJsonWriterAsync(Stream stream, bool isIeee754Compatible, Encoding encoding)
         {
             return new ODataUtf8JsonWriter(stream, isIeee754Compatible, encoding);
+        }
+
+        internal async Task WriteSpecialCharsInChunksOfOddStringInChunksAsync(TextWriter tw, string input)
+        {
+            // Define chunk size
+            int chunkSize = 3;
+
+            // Stream the string to the output stream in chunks
+            for (int i = 0; i < input.Length; i += chunkSize)
+            {
+                int remainingLength = Math.Min(chunkSize, input.Length - i);
+                string chunk = input.Substring(i, remainingLength);
+                await tw.WriteAsync(chunk.ToCharArray());
+            }
+
         }
     }
 }
